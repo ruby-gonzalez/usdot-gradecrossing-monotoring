@@ -257,21 +257,21 @@ def read_first_frame(video_path: Path) -> tuple[np.ndarray, float, int, int]:
 
 
 def annotate_full_video(video_path: Path, zone: np.ndarray, out_path: Path , fps: float,
-                        width: 640, height: 480, progress_every: int = 100,min_area=4800, max_area=10000, mask_out_path = Path, max_age=30,n_init=3,display=True) -> None:
+                        width: 640, height: 480, progress_every: int = 100,min_area=4800, max_area=10000, mask_out_path=None, max_age=30,n_init=3,display=True) -> None:
     """Render the ROI polygon and the Tracking logic over every frame of the video."""
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise FileNotFoundError(f"Could not open video: {video_path}")
     
     algorithm = bgs.SuBSENSE()
-    tracker = build_tracker(max_age=max_age,n_init=n_init)
+    tracker = build_tracker(max_age=max_age,n_init=n_init, use_gpu=torch.cuda.is_available())
 
 
     writer=None
     mask_writer=None
     if out_path:
         if mask_out_path is None:#if theres no specified output path for the mask
-            mask_out_path = mask_out_path(out_path)#put the mask in the same folder as the annotated video
+            mask_out_path = _mask_output_path(out_path)#put the mask in the same folder as the annotated video
         
         out_dir = os.path.dirname(os.path.abspath(out_path))
         os.makedirs(out_dir,exist_ok=True)
@@ -302,8 +302,7 @@ def annotate_full_video(video_path: Path, zone: np.ndarray, out_path: Path , fps
         detections = blobs_to_detections(blobs)
         #status = alarm_state(detections) <-tbd smh
         tracks = tracker.update_tracks(detections, frame=frame)
-        #writer.write(draw_zone_overlay(frame, zone))
-        #draw_zone_overlay(frame,zone)
+        frame = draw_zone_overlay(frame, zone)
         draw_tracks(frame, tracks)
         processed += 1
         if progress_every and processed % progress_every == 0:
@@ -337,7 +336,7 @@ def annotate_full_video(video_path: Path, zone: np.ndarray, out_path: Path , fps
 #this is for the ROI stuff handles the edge case for if we choose the metadata from JSON (file already exists) 
 #OR if we want the seg model to generate a new one
 def run(args: argparse.Namespace) -> None:
-    #args.output_dir.mkdir(parents=True, exist_ok=True)
+    args.output_dir.mkdir(parents=True, exist_ok=True)
     if args.zone_json:
         zone = load_zone_json(args.zone_json)
         zone_metadata = {"source": "zone_json", "path": str(args.zone_json)}
