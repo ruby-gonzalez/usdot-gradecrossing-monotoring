@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+ #!/usr/bin/env python3
 """Extract the rail track-corridor ROI (region of interest) polygon.
 
 ROI-only slice of the counting pipeline: this derives the track-corridor
@@ -124,17 +124,8 @@ def build_tracker(max_age=30, n_init=3, max_cosine_distance=0.2,
 
 
 def _mask_output_path(output_path: Path):
-    """Derive the mask video path from the tracked-video path.
-
-    ``foo/clip_tracked.mp4`` -> ``foo/clip_tracked_mask.mp4``, so the two
-    outputs sit side by side and are easy to pair up.
-    """
     root, ext = os.path.splitext(output_path)
     return f"{root}_mask{ext}"
-
-
-def alarm_state():
-    return None
 
 
 
@@ -257,7 +248,7 @@ def read_first_frame(video_path: Path) -> tuple[np.ndarray, float, int, int]:
 
 
 def annotate_full_video(video_path: Path, zone: np.ndarray, out_path: Path , fps: float,
-                        width: 640, height: 480, progress_every: int = 100,min_area=4800, max_area=10000, mask_out_path=None, max_age=30,n_init=3,display=True) -> None:
+                        width: 640, height: 480, progress_every: int = 100, min_area=3800, max_area=10000, mask_out_path=None, max_age=30,n_init=3,display=True, dwell_frames=30) -> None:
     """Render the ROI polygon and the Tracking logic over every frame of the video."""
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -291,6 +282,9 @@ def annotate_full_video(video_path: Path, zone: np.ndarray, out_path: Path , fps
         if not mask_writer.isOpened():
             raise ValueError(f"Could not open video writer for: {mask_out_path}")"""
 
+
+    """Alarm Logic"""
+    dwell = {}   # track_id -> consecutive frames spent INSIDE the ROI
     processed = 0
     while True:
         ok, frame = cap.read()
@@ -300,10 +294,41 @@ def annotate_full_video(video_path: Path, zone: np.ndarray, out_path: Path , fps
         fg_mask = algorithm.apply(frame)
         blobs, cleaned = detect_blobs(fg_mask, min_area=min_area, max_area=max_area)
         detections = blobs_to_detections(blobs)
-        #status = alarm_state(detections) <-tbd smh
         tracks = tracker.update_tracks(detections, frame=frame)
+
+        # Per-object dwell: count consecutive frames each confirmed track spends
+        # inside the ROI. Reset to 0 the frame it leaves, so a high count means
+        # "stopped/loitering in the corridor", not "seen a lot overall".
+        seen_ids = set()
+        for track in tracks:
+            if not track.is_confirmed():
+                continue
+
+            seen_ids.add(track.track_id)
+
+            # Foot point = bottom-center of the box (where the object meets ground).
+            left, top, right, bottom = track.to_ltrb()
+            foot = (float((left + right) / 2), float(bottom))
+            inside = cv2.pointPolygonTest(zone.astype(np.int32), foot, False) >= 0
+
+            if inside:
+                dwell[track.track_id] = dwell.get(track.track_id, 0) + 1
+            else:
+                dwell[track.track_id] = 0
+
+        # Prune IDs not seen this frame (DeepSORT IDs grow unbounded over time).
+        for tid in set(dwell) - seen_ids:
+            del dwell[tid]
+
+        status = "ALARM" if any(v >= dwell_frames for v in dwell.values()) else "CLEAR"
+
         frame = draw_zone_overlay(frame, zone)
         draw_tracks(frame, tracks)
+
+        status_color = (0, 0, 255) if status == "ALARM" else (0, 255, 0)
+        cv2.putText(frame, f"Alarm Status: {status.upper()}", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, status_color, 2, cv2.LINE_AA)
+
         processed += 1
         if progress_every and processed % progress_every == 0:
             print(f"Annotated {processed} frames")
@@ -385,7 +410,8 @@ def run(args: argparse.Namespace) -> None:
 
     if args.annotate_video:
         annotate_full_video(
-            args.video, zone, args.output_dir / "roi_annotated.mp4", fps, width, height
+            args.video, zone, args.output_dir / "roi_annotated.mp4", fps, width, height,
+            dwell_frames=args.dwell_frames,
         )
 
 #fix this for sure
@@ -398,6 +424,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rail-threshold", type=float, default=0.35)
     parser.add_argument("--scan-step", type=int, default=30)
     parser.add_argument("--scan-limit", type=int, default=900)
+    parser.add_argument("--dwell-frames", type=int, default=30, help="Consecutive frames inside ROI before alarm.")
     parser.add_argument("--annotate-video", action="store_true",
                         help="Also render the ROI over every frame of the video.")
     args = parser.parse_args()
