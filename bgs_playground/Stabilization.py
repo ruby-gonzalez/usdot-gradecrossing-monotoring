@@ -25,100 +25,102 @@ def fixBorder(frame):
 
 SMOOTHING_RADIUS = 50
 
-cap = cv2.VideoCapture('motorcycles.mp4')
 
-if not cap.isOpened():
-    print("Error: Could not open video file.")
-    exit()
+def stablize(video_path):
+    cap = cv2.VideoCapture(video_path)
 
-n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-fps = cap.get(cv2.CAP_PROP_FPS)
+    if not cap.isOpened():
+        print("Error: Could not open video file.")
+        exit()
 
-fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-out = cv2.VideoWriter('motorcycles_stabilized.mp4', fourcc, fps, (2 * w, h))
-# out = cv2.VideoWriter('video_stabilized.mp4', fourcc, fps, (w, h))
+    n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
 
-if not out.isOpened():
-    print("Error: Could not open video writer with codec 'mp4v'")
-    exit()
-else:
-    print("Video writer opened successfully with codec 'mp4v'")
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter('motorcycles_stabilized.mp4', fourcc, fps, (2 * w, h))
+    # out = cv2.VideoWriter('video_stabilized.mp4', fourcc, fps, (w, h))
 
-_, prev = cap.read()
+    if not out.isOpened():
+        print("Error: Could not open video writer with codec 'mp4v'")
+        exit()
+    else:
+        print("Video writer opened successfully with codec 'mp4v'")
 
-if prev is None:
-    print("Error: Could not read the first frame.")
-    exit()
+    _, prev = cap.read()
 
-prev_gray = cv2.cvtColor(prev, cv2.COLOR_BGR2GRAY)
-transforms = np.zeros((n_frames - 1, 3), np.float32)
+    if prev is None:
+        print("Error: Could not read the first frame.")
+        exit()
 
-for i in range(n_frames - 1):
-    prev_pts = cv2.goodFeaturesToTrack(prev_gray, maxCorners=200, qualityLevel=0.01, minDistance=30, blockSize=3)
-    success, curr = cap.read()
-    if not success:
-        break
+    prev_gray = cv2.cvtColor(prev, cv2.COLOR_BGR2GRAY)
+    transforms = np.zeros((n_frames - 1, 3), np.float32)
 
-    curr_gray = cv2.cvtColor(curr, cv2.COLOR_BGR2GRAY)
-    curr_pts, status, err = cv2.calcOpticalFlowPyrLK(prev_gray, curr_gray, prev_pts, None)
+    for i in range(n_frames - 1):
+        prev_pts = cv2.goodFeaturesToTrack(prev_gray, maxCorners=200, qualityLevel=0.01, minDistance=30, blockSize=3)
+        success, curr = cap.read()
+        if not success:
+            break
 
-    assert prev_pts.shape == curr_pts.shape
+        curr_gray = cv2.cvtColor(curr, cv2.COLOR_BGR2GRAY)
+        curr_pts, status, err = cv2.calcOpticalFlowPyrLK(prev_gray, curr_gray, prev_pts, None)
 
-    idx = np.where(status == 1)[0]
-    prev_pts = prev_pts[idx]
-    curr_pts = curr_pts[idx]
+        assert prev_pts.shape == curr_pts.shape
 
-    m, _ = cv2.estimateAffinePartial2D(prev_pts, curr_pts)
-    if m is None:
-        m = np.eye(2, 3, dtype=np.float32)
-    dx = m[0, 2]
-    dy = m[1, 2]
-    da = np.arctan2(m[1, 0], m[0, 0])
+        idx = np.where(status == 1)[0]
+        prev_pts = prev_pts[idx]
+        curr_pts = curr_pts[idx]
 
-    transforms[i] = [dx, dy, da]
-    prev_gray = curr_gray
+        m, _ = cv2.estimateAffinePartial2D(prev_pts, curr_pts)
+        if m is None:
+            m = np.eye(2, 3, dtype=np.float32)
+        dx = m[0, 2]
+        dy = m[1, 2]
+        da = np.arctan2(m[1, 0], m[0, 0])
 
-    print("Frame: " + str(i) + "/" + str(n_frames) + " -  Tracked points : " + str(len(prev_pts)))
+        transforms[i] = [dx, dy, da]
+        prev_gray = curr_gray
+
+        print("Frame: " + str(i) + "/" + str(n_frames) + " -  Tracked points : " + str(len(prev_pts)))
 
 
 
-trajectory = np.cumsum(transforms, axis=0)
-smoothed_trajectory = smooth(trajectory)
-difference = smoothed_trajectory - trajectory
-transforms_smooth = transforms + difference
+    trajectory = np.cumsum(transforms, axis=0)
+    smoothed_trajectory = smooth(trajectory)
+    difference = smoothed_trajectory - trajectory
+    transforms_smooth = transforms + difference
 
-cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
-for i in range(n_frames - 1):
-    success, frame = cap.read()
-    if not success:
-        break
+    for i in range(n_frames - 1):
+        success, frame = cap.read()
+        if not success:
+            break
 
-    dx = transforms_smooth[i, 0]
-    dy = transforms_smooth[i, 1]
-    da = transforms_smooth[i, 2]
+        dx = transforms_smooth[i, 0]
+        dy = transforms_smooth[i, 1]
+        da = transforms_smooth[i, 2]
 
-    m = np.zeros((2, 3), np.float32)
-    m[0, 0] = np.cos(da)
-    m[0, 1] = -np.sin(da)
-    m[1, 0] = np.sin(da)
-    m[1, 1] = np.cos(da)
-    m[0, 2] = dx
-    m[1, 2] = dy
+        m = np.zeros((2, 3), np.float32)
+        m[0, 0] = np.cos(da)
+        m[0, 1] = -np.sin(da)
+        m[1, 0] = np.sin(da)
+        m[1, 1] = np.cos(da)
+        m[0, 2] = dx
+        m[1, 2] = dy
 
-    frame_stabilized = cv2.warpAffine(frame, m, (w, h)) 
-    frame_stabilized = fixBorder(frame_stabilized)
-    frame_out = cv2.hconcat([frame, frame_stabilized])
-    # frame_out = frame_stabilized
+        frame_stabilized = cv2.warpAffine(frame, m, (w, h)) 
+        frame_stabilized = fixBorder(frame_stabilized)
+        frame_out = cv2.hconcat([frame, frame_stabilized])
+        # frame_out = frame_stabilized
 
-    out.write(frame_out)
-    if frame_out.shape[1] > 1600 or frame_out.shape[0] > 900: 
-        frame_out = cv2.resize(frame_out, (frame_out.shape[1]//2, frame_out.shape[0]//2))
-    cv2.imshow("Before and After", frame_out)
-    cv2.waitKey(10)
+        out.write(frame_out)
+        if frame_out.shape[1] > 1600 or frame_out.shape[0] > 900: 
+            frame_out = cv2.resize(frame_out, (frame_out.shape[1]//2, frame_out.shape[0]//2))
+        cv2.imshow("Before and After", frame_out)
+        cv2.waitKey(10)
 
-cap.release()
-out.release()
-cv2.destroyAllWindows()
+    cap.release()
+    out.release()
+    cv2.destroyAllWindows()
