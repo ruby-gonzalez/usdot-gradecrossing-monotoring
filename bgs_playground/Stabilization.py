@@ -1,4 +1,5 @@
-# %%
+"""REFERENCE CODE:https://github.com/AdiGhadge/Video-Stabilization-Using-Lucas-Kanade-Method/blob/main/Video%20Stabilization/Stabilization.py"""
+
 import numpy as np
 import cv2
 
@@ -121,39 +122,3 @@ for i in range(n_frames - 1):
 cap.release()
 out.release()
 cv2.destroyAllWindows()
-
-
-# %%
-import matplotlib.pyplot as plt
-
-# %%
-with plt.style.context('ggplot'):
-    fig, (ax1, ax2, ax3) = plt.subplots(3, sharex='all')
-
-    # x trajectory
-    ax1.plot(trajectory[:, 0], label='Trajectory')
-    ax1.plot(smoothed_trajectory[:, 0], label='Smoothed Trajectory')
-    ax1.set_ylabel('dx')
-
-    # y trajectory
-    ax2.plot(trajectory[:, 1], label='Trajectory')
-    ax2.plot(smoothed_trajectory[:, 1], label='Smoothed Trajectory')
-    ax2.set_ylabel('dy')
-
-    # angle trajectory
-    ax3.plot(np.rad2deg(trajectory[:, 2]), label='Trajectory')
-    ax3.plot(np.rad2deg(smoothed_trajectory[:, 2]), label='Smoothed Trajectory')
-    ax3.set_ylabel('da')
-
-    handles, labels = ax3.get_legend_handles_labels()
-    fig.legend(handles, labels, loc='upper right')
-
-    plt.xlabel('Frame Number')
-
-    fig.suptitle('Video Trajectory', x=0.15, y=0.96, ha='left')
-    fig.canvas.manager.set_window_title('Trajectory')
-
-# %%
-
-
-
