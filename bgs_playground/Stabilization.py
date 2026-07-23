@@ -2,7 +2,8 @@
 
 import numpy as np
 import cv2
-
+from pathlib import Path
+import argparse
 def movingAverage(curve, radius):
     window_size = 2 * radius + 1
     f = np.ones(window_size) / window_size
@@ -26,7 +27,7 @@ def fixBorder(frame):
 SMOOTHING_RADIUS = 50
 
 
-def stablize(video_path):
+def stablize(video_path: Path):
     cap = cv2.VideoCapture(video_path)
 
     if not cap.isOpened():
@@ -124,3 +125,7 @@ def stablize(video_path):
     cap.release()
     out.release()
     cv2.destroyAllWindows()
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--video", required=True, type=Path, help="Input video path.")
