@@ -328,7 +328,7 @@ def annotate_full_video(video_path: Path, zone: np.ndarray, out_path: Path , fps
         status_color = (0, 0, 255) if status == "ALARM" else (0, 255, 0)
         cv2.putText(frame, f"Alarm Status: {status.upper()}", (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, status_color, 2, cv2.LINE_AA)
-
+#test push
         processed += 1
         if progress_every and processed % progress_every == 0:
             print(f"Annotated {processed} frames")
