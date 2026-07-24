@@ -253,20 +253,51 @@ def read_first_frame(video_path: Path) -> tuple[np.ndarray, float, int, int]:
 
 #----------VIDEO STABILIZATION LOGIC BEGINS----------
 
+def read_frame_at(video_path: Path, index: int) -> np.ndarray | None:
+    """Read a single frame at ``index`` (0-based); None if unavailable.
 
-
+    Used to fetch the reference frame the ROI polygon was derived from, which
+    ``ROIStabilizer`` matches every later frame against.
+    """
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        return None
+    cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, int(index)))
+    ok, frame = cap.read()
+    cap.release()
+    return frame if ok else None
 #----------VIDEO STABILIZATION LOGIC ENDS----------
 
 
 def annotate_full_video(video_path: Path, zone: np.ndarray, out_path: Path , fps: float,
-                        width: 640, height: 480, progress_every: int = 100,min_area=4800, max_area=10000, mask_out_path=None, max_age=30,n_init=3,display=True) -> None:
-    """Render the ROI polygon and the Tracking logic over every frame of the video."""
+                        width: 640, height: 480, progress_every: int = 100,min_area=4800, max_area=10000, mask_out_path=None, max_age=30,n_init=3,display=True,
+                        stabilize_roi=False, ref_frame=None) -> None:
+    """Render the ROI polygon and the Tracking logic over every frame of the video.
+
+    When ``stabilize_roi`` is set, the ROI polygon is warped every frame with
+    ``ROIStabilizer`` so it stays locked on the rails under camera shake. The
+    frame pixels are left untouched (BGS/tracking see the raw frame); only the
+    overlay polygon moves. ``ref_frame`` is the reference the polygon was
+    derived from; the first frame is used if none is given.
+    """
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise FileNotFoundError(f"Could not open video: {video_path}")
-    
+
     algorithm = bgs.SuBSENSE()
     tracker = build_tracker(max_age=max_age,n_init=n_init, use_gpu=torch.cuda.is_available())
+
+    stabilizer = None
+    if stabilize_roi:
+        if ref_frame is None:
+            # No reference supplied: use the first frame as the ROI's home
+            # position, then rewind so the main loop still starts at frame 0.
+            first_ok, first = cap.read()
+            if first_ok:
+                ref_frame = first
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        if ref_frame is not None:
+            stabilizer = ROIStabilizer(ref_frame, zone)
 
 
     writer=None
@@ -304,7 +335,8 @@ def annotate_full_video(video_path: Path, zone: np.ndarray, out_path: Path , fps
         detections = blobs_to_detections(blobs)
         #status = alarm_state(detections) <-tbd smh
         tracks = tracker.update_tracks(detections, frame=frame)
-        frame = draw_zone_overlay(frame, zone)
+        zone_now = stabilizer.stabilize(frame) if stabilizer is not None else zone
+        frame = draw_zone_overlay(frame, zone_now)
         draw_tracks(frame, tracks)
         processed += 1
         if progress_every and processed % progress_every == 0:
@@ -386,8 +418,16 @@ def run(args: argparse.Namespace) -> None:
     print(f"Wrote {summary_path}")
 
     if args.annotate_video:
+        # The polygon is aligned to the frame it was derived from: the rail
+        # model's scan frame when available, otherwise the first frame.
+        ref_frame = frame
+        if args.rail_model and "scan_frame" in zone_metadata:
+            scan_ref = read_frame_at(args.video, zone_metadata["scan_frame"])
+            if scan_ref is not None:
+                ref_frame = scan_ref
         annotate_full_video(
-            args.video, zone, args.output_dir / "roi_annotated.mp4", fps, width, height
+            args.video, zone, args.output_dir / "roi_annotated.mp4", fps, width, height,
+            stabilize_roi=args.stabilize_roi, ref_frame=ref_frame,
         )
 
 #fix this for sure
@@ -402,6 +442,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scan-limit", type=int, default=900)
     parser.add_argument("--annotate-video", action="store_true",
                         help="Also render the ROI over every frame of the video.")
+    parser.add_argument("--no-stabilize-roi", dest="stabilize_roi", action="store_false",
+                        help="Disable LK ROI stabilization (keep the ROI polygon fixed). "
+                             "Stabilization is inert on static footage thanks to a dead-zone guard.")
+    parser.set_defaults(stabilize_roi=True)
     args = parser.parse_args()
     if args.rail_model and args.zone_json:
         parser.error("Use only one of --rail-model or --zone-json.")

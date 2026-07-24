@@ -134,6 +134,25 @@ when you reach the step that uses them:
   [cv2.pointPolygonTest](https://docs.opencv.org/4.x/d3/dc0/group__imgproc__shape.html#ga1a539e8db2135af2566103705d7a5722).
 - Steps 5-6: no new docs — wiring + verification with what's above.
 
+## ROI stabilization (camera shake) — edge case, not observed yet
+
+Current clips are static; this was added defensively, not for a real shaky
+clip. `ROIStabilizer` (Stabilization.py) warps only the ROI *polygon* to
+follow camera motion, matching each frame against the reference frame the
+polygon was derived from (rail model's `scan_frame`, else first frame) with
+Lucas-Kanade. Reference-based => drift-free. A dead-zone guard collapses
+sub-threshold motion (<1 px, <0.002 rad) to identity, so it is inert on static
+footage. Wired into `annotate_full_video` via `stabilize_roi` (on by default,
+`--no-stabilize-roi` to disable); frame pixels stay raw so BGS/DeepSORT see the
+real image.
+
+- TRADEOFF: this moves the polygon only. SuBSENSE still sees a shaking frame,
+  so real shake would still produce bg-sub false foreground (repeatable
+  phantom edge blobs that can survive `min_area` and get promoted by
+  `n_init`). Polygon-warp does NOT fix that.
+- TODO (only if a genuinely shaky clip appears): go hybrid — stabilize the
+  FRAME before SuBSENSE, not just the ROI. Bigger job; deferred under YAGNI.
+
 ## Gotchas to watch
 
 - Dwell dict lives OUTSIDE the frame loop, or it resets every frame.
