@@ -96,10 +96,10 @@ class ROIStabilizer:
 
 
 def stablize(video_path: Path):
-    cap = cv2.VideoCapture(video_path)
+    cap = cv2.VideoCapture(str(video_path))
 
     if not cap.isOpened():
-        print("Error: Could not open video file.")
+        print("Error: Could not open video file. Failed here")
         exit()
 
     n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -108,8 +108,8 @@ def stablize(video_path: Path):
     fps = cap.get(cv2.CAP_PROP_FPS)
 
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter('motorcycles_stabilized.mp4', fourcc, fps, (2 * w, h))
-    # out = cv2.VideoWriter('video_stabilized.mp4', fourcc, fps, (w, h))
+    #out = cv2.VideoWriter('motorcycles_stabilized.mp4', fourcc, fps, (2 * w, h))
+    out = cv2.VideoWriter('video_stabilized.mp4', fourcc, fps, (w, h))
 
     if not out.isOpened():
         print("Error: Could not open video writer with codec 'mp4v'")
@@ -196,4 +196,11 @@ def stablize(video_path: Path):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--video", required=True, type=Path, help="Input video path.")
+    parser.add_argument("--video-path", required=True, type=Path, help="Input video path.")
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+
+    args=parse_args()
+    stablize(args.video_path)

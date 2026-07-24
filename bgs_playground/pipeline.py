@@ -44,7 +44,6 @@ def poly_shape(args):
     if args.zone_json:
         zone = load_zone_json(args.zone_json)
         zone_metadata = {"source": "zone_json", "path": str(args.zone_json)}
-        print(zone.shape)
     elif args.rail_model:
         zone, zone_metadata = detect_zone_from_rail_model(
             args.rail_model,
@@ -53,9 +52,10 @@ def poly_shape(args):
             args.scan_step,
             args.scan_limit,
         )
-        print(zone.shape)
     else:
         raise SystemExit("Provide either --rail-model or --zone-json.")
+
+    return zone,zone_metadata
 
 def alarm_state(tracks):
     for track in tracks:
@@ -136,7 +136,7 @@ def _mask_output_path(output_path):
     return f"{root}_mask{ext}"
 
 
-def track_video(video_path, min_area=1, max_area=None, display=True,
+def track_video(video_path, zone: np.ndarray, min_area=1, max_area=None, display=True,
                 output_path=None, mask_output_path=None, max_age=30, n_init=3):
     """Run BGS + blob detection + DeepSORT tracking over a video.
 
@@ -193,6 +193,9 @@ def track_video(video_path, min_area=1, max_area=None, display=True,
         mask_writer = cv2.VideoWriter(mask_output_path, fourcc, fps, (width, height))
         if not mask_writer.isOpened():
             raise ValueError(f"Could not open video writer for: {mask_output_path}")
+        
+
+
     '''directory logic ends here'''
 
     while True:
@@ -206,12 +209,15 @@ def track_video(video_path, min_area=1, max_area=None, display=True,
         status = alarm_state(detections)
         # update_tracks needs the frame so the embedder can crop each detection.
         tracks = tracker.update_tracks(detections, frame=frame)
+
+        frame=draw_zone_overlay(frame,zone)
+
         draw_tracks(frame, tracks)
 
         # Overlay the alarm status on the frame: red when alarming, green when
         # clear. Drawn after draw_tracks so it sits on top, and before write/
         # imshow so it lands in both the saved video and the live window.
-        status_color = (0, 0, 255) if status == "alarm" else (0, 255, 0)
+        status_color = (0, 0, 255) if status == "ALARM" else (0, 255, 0)
         cv2.putText(frame, f"Alarm Status: {status.upper()}", (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, status_color, 2, cv2.LINE_AA)
 
@@ -264,4 +270,4 @@ def parse_args() -> argparse.Namespace:
 if __name__ == "__main__":
     args=parse_args()
     print(args)
-    poly_shape(args)
+    print(poly_shape(args))
