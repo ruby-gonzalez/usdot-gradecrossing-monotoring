@@ -58,6 +58,9 @@ from blob_analysis import detect_blobs
 from infer_seg_lines import extract_zone_from_heatmap
 from train_rail_seg import RailSegModel
 
+#for Stabilization
+from Stabilization import *
+
 #-----------TRACKER LOGIC-----------BEGINS
 
 
@@ -246,16 +249,53 @@ def read_first_frame(video_path: Path) -> tuple[np.ndarray, float, int, int]:
 #----------ROI LOGIC---------- ENDS
 
 
+#----------VIDEO STABILIZATION LOGIC BEGINS----------
+def read_frame_at(video_path: Path, index: int) -> np.ndarray | None:
+    """Read a single frame at ``index`` (0-based); None if unavailable.
+
+    Used to fetch the reference frame the ROI polygon was derived from, which
+    ``ROIStabilizer`` matches every later frame against.
+    """
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        return None
+    cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, int(index)))
+    ok, frame = cap.read()
+    cap.release()
+    return frame if ok else None
+#----------VIDEO STABILIZATION LOGIC ENDS----------
+
+
 
 def annotate_full_video(video_path: Path, zone: np.ndarray, out_path: Path , fps: float,
-                        width: 640, height: 480, progress_every: int = 100, min_area=3800, max_area=10000, mask_out_path=None, max_age=30,n_init=3,display=True, dwell_frames=30) -> None:
-    """Render the ROI polygon and the Tracking logic over every frame of the video."""
+                        width: 640, height: 480, progress_every: int = 100, min_area=3800, max_area=10000, mask_out_path=None, max_age=30,n_init=3,display=True, dwell_frames=30,
+                        stabilize_roi=False, ref_frame=None) -> None:
+    """Render the ROI polygon and the Tracking logic over every frame of the video.
+
+    When ``stabilize_roi`` is set, the ROI polygon is warped every frame with
+    ``ROIStabilizer`` so both the overlay AND the alarm gate stay locked on the
+    rails under camera shake. Frame pixels are left untouched (BGS/tracking see
+    the raw frame); only the polygon moves. ``ref_frame`` is the reference the
+    polygon was derived from; the first frame is used if none is given.
+    """
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise FileNotFoundError(f"Could not open video: {video_path}")
-    
+
     algorithm = bgs.SuBSENSE()
     tracker = build_tracker(max_age=max_age,n_init=n_init, use_gpu=torch.cuda.is_available())
+
+    stabilizer = None
+    if stabilize_roi:
+        if ref_frame is None:
+            # No reference supplied: use the first frame as the ROI's home
+            # position, then rewind so the main loop still starts at frame 0.
+            first_ok, first = cap.read()
+            if first_ok:
+                ref_frame = first
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        if ref_frame is not None:
+            stabilizer = ROIStabilizer(ref_frame, zone)
 
 
     writer=None
@@ -296,6 +336,11 @@ def annotate_full_video(video_path: Path, zone: np.ndarray, out_path: Path , fps
         detections = blobs_to_detections(blobs)
         tracks = tracker.update_tracks(detections, frame=frame)
 
+        # Stabilized ROI for this frame: follows the rails under camera shake,
+        # or the fixed polygon when stabilization is off. Used for BOTH the
+        # alarm gate and the overlay so they stay aligned.
+        zone_now = stabilizer.stabilize(frame) if stabilizer is not None else zone
+
         # Per-object dwell: count consecutive frames each confirmed track spends
         # inside the ROI. Reset to 0 the frame it leaves, so a high count means
         # "stopped/loitering in the corridor", not "seen a lot overall".
@@ -309,7 +354,7 @@ def annotate_full_video(video_path: Path, zone: np.ndarray, out_path: Path , fps
             # Foot point = bottom-center of the box (where the object meets ground).
             left, top, right, bottom = track.to_ltrb()
             foot = (float((left + right) / 2), float(bottom))
-            inside = cv2.pointPolygonTest(zone.astype(np.int32), foot, False) >= 0
+            inside = cv2.pointPolygonTest(zone_now.astype(np.int32), foot, False) >= 0
 
             if inside:
                 dwell[track.track_id] = dwell.get(track.track_id, 0) + 1
@@ -322,7 +367,7 @@ def annotate_full_video(video_path: Path, zone: np.ndarray, out_path: Path , fps
 
         status = "ALARM" if any(v >= dwell_frames for v in dwell.values()) else "CLEAR"
 
-        frame = draw_zone_overlay(frame, zone)
+        frame = draw_zone_overlay(frame, zone_now)
         draw_tracks(frame, tracks)
 
         status_color = (0, 0, 255) if status == "ALARM" else (0, 255, 0)
@@ -409,9 +454,17 @@ def run(args: argparse.Namespace) -> None:
     print(f"Wrote {summary_path}")
 
     if args.annotate_video:
+        # The polygon is aligned to the frame it was derived from: the rail
+        # model's scan frame when available, otherwise the first frame.
+        ref_frame = frame
+        if args.rail_model and "scan_frame" in zone_metadata:
+            scan_ref = read_frame_at(args.video, zone_metadata["scan_frame"])
+            if scan_ref is not None:
+                ref_frame = scan_ref
         annotate_full_video(
             args.video, zone, args.output_dir / "roi_annotated.mp4", fps, width, height,
             dwell_frames=args.dwell_frames,
+            stabilize_roi=args.stabilize_roi, ref_frame=ref_frame,
         )
 
 #fix this for sure
@@ -427,6 +480,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dwell-frames", type=int, default=30, help="Consecutive frames inside ROI before alarm.")
     parser.add_argument("--annotate-video", action="store_true",
                         help="Also render the ROI over every frame of the video.")
+    parser.add_argument("--no-stabilize-roi", dest="stabilize_roi", action="store_false",
+                        help="Disable LK ROI stabilization (keep the ROI polygon fixed). "
+                             "Stabilization is inert on static footage thanks to a dead-zone guard.")
+    parser.set_defaults(stabilize_roi=True)
     args = parser.parse_args()
     if args.rail_model and args.zone_json:
         parser.error("Use only one of --rail-model or --zone-json.")
